@@ -21,12 +21,12 @@ interface UserReposResp {
 export default function NewIssuesWatcher() {
   const router = useRouter();
   const { push } = useToast();
-  const { weights: sn74Weights } = useSn74Repos();
+  const { weights: sn74Weights, isSuccess: sn74ReposReady } = useSn74Repos();
   // User-added custom repos are tracked separately from the SN74 list but
   // are also intentionally watched. Combining the two gives the watcher
   // its allowlist.
-  const { data: userReposData } = useQuery<UserReposResp>({
-    queryKey: ['watcher-user-repos'],
+  const { data: userReposData, isSuccess: userReposReady } = useQuery<UserReposResp>({
+    queryKey: ['user-repos'],
     queryFn: async ({ signal }) => {
       const r = await fetch('/api/user-repos', { signal });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -87,6 +87,7 @@ export default function NewIssuesWatcher() {
 
   useEffect(() => {
     if (!data) return;
+    if (!sn74ReposReady || !userReposReady) return;
 
     // Allowlist: live SN74 repos plus any user-added custom repos. Issues
     // from anything else (historical cache for repos dropped from upstream,
@@ -102,10 +103,10 @@ export default function NewIssuesWatcher() {
     for (const i of data.issues) {
       const key = `${i.repo_full_name}#${i.number}`;
       if (seenRef.current.has(key)) continue;
-      seenRef.current.add(key);
 
       const slug = i.repo_full_name.toLowerCase();
       if (!sn74Weights.has(slug) && !userRepoSet.has(slug)) continue;
+      seenRef.current.add(key);
 
       // Only toast issues that were actually CREATED on GitHub after the user
       // loaded the dashboard. `first_seen_at` is when our cache first saw it,
@@ -163,7 +164,7 @@ export default function NewIssuesWatcher() {
         ttlMs: 8000,
       });
     }
-  }, [data, push, router, sn74Weights, userReposData]);
+  }, [data, push, router, sn74Weights, sn74ReposReady, userReposData, userReposReady]);
 
   return null;
 }
