@@ -263,15 +263,20 @@ export default function DocsPage() {
 
             <Article id="pulls" title="Pull Requests page">
               <P>
-                <Code>/pulls</Code> — global PR feed with linked-issue parsing. Each PR's body is scanned for{' '}
-                <Code>Fixes #N</Code> / <Code>Closes owner/repo#N</Code> patterns, and the linked issues appear inline.
-                Click a linked issue chip to jump to that issue.
+                <Code>/pulls</Code> — global server-backed PR feed across tracked repositories. Results are fetched a
+                page at a time, with the same compact pagination and row-count controls used by the Issues view.
               </P>
               <P>
-                Same filter set as Issues plus a <strong>My PRs only</strong> checkbox. The <strong>Author</strong> and{' '}
-                <strong>Merged / Closed</strong> column headers contain inline filter dropdowns — small blue dot
-                indicates a filter is active.
+                Use search, state, author, <strong>Tracked only</strong>, and <strong>My PRs only</strong> filters to
+                narrow the feed without loading the full cache into the browser. Star controls on each row update the
+                tracked repo set used by the filter.
               </P>
+              <Ul>
+                <Li><strong>Pagination</strong>: page controls at the table edge with configurable rows per page</Li>
+                <Li><strong>Author activity</strong>: click an author to open their repo-scoped activity sidebar with latest PRs and issues</Li>
+                <Li><strong>Score</strong>: Gittensor-backed PR score column; open PRs show potential and collateral values, merged PRs show the final score</Li>
+                <Li><strong>Sorting</strong>: server-backed sort controls keep large PR sets responsive</Li>
+              </Ul>
             </Article>
 
             <Article id="my-prs" title="My PRs">
