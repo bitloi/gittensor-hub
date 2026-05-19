@@ -60,10 +60,10 @@ export async function GET(
     return NextResponse.json({ error: 'Invalid issue number' }, { status: 400, headers: NO_STORE_HEADERS });
   }
 
-  // Opportunistic GraphQL fetch of authoritative linked-PR refs for this
-  // issue (catches manual sidebar links + parenthetical mentions the body
-  // regex misses). Fire-and-forget — the user's response isn't blocked.
-  refreshIssueLinkedPrsIfStale(owner, name, num).catch(() => {});
+  // Fetch authoritative linked-PR refs before computing merged counts. The
+  // helper is throttled and in-flight deduped, so awaiting it keeps the first
+  // detail open accurate without repeatedly hammering GitHub.
+  await refreshIssueLinkedPrsIfStale(owner, name, num);
 
   // 1. Try cache first.
   const db = getDb();

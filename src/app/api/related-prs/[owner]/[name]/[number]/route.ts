@@ -3,6 +3,14 @@ import { getReadDb, PullRow } from '@/lib/db';
 import { backfillPrIssueLinksIfNeeded, refreshIssueLinkedPrsIfStale } from '@/lib/refresh';
 
 export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+export const fetchCache = 'force-no-store';
+
+const NO_STORE_HEADERS = {
+  'Cache-Control': 'no-store, no-cache, max-age=0, must-revalidate',
+  Pragma: 'no-cache',
+  Expires: '0',
+};
 
 export async function GET(
   _req: NextRequest,
@@ -11,11 +19,12 @@ export async function GET(
   const params = await ctx.params;
   const repo = `${params.owner}/${params.name}`;
   const issueNum = parseInt(params.number, 10);
+  if (!Number.isFinite(issueNum)) {
+    return NextResponse.json({ error: 'Invalid issue number' }, { status: 400, headers: NO_STORE_HEADERS });
+  }
 
   backfillPrIssueLinksIfNeeded(repo);
-  if (Number.isFinite(issueNum)) {
-    refreshIssueLinkedPrsIfStale(params.owner, params.name, issueNum).catch(() => {});
-  }
+  await refreshIssueLinkedPrsIfStale(params.owner, params.name, issueNum);
 
   const db = getReadDb();
   const rows = db
@@ -39,5 +48,5 @@ export async function GET(
     issue_number: issueNum,
     count: rows.length,
     pulls: rows,
-  });
+  }, { headers: NO_STORE_HEADERS });
 }
