@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import {
@@ -14,30 +14,36 @@ import Spinner from '@/components/Spinner';
 import { TableRowsSkeleton } from '@/components/Skeleton';
 import Dropdown from '@/components/Dropdown';
 import AuthorFilter from '@/components/AuthorFilter';
-import AuthorSidebar from '@/components/AuthorSidebar';
+import AuthorActivitySidebar from '@/components/PullAuthorSidebar';
 import {
   SearchIcon,
   CommentIcon,
+  GitPullRequestIcon,
   RepoIcon,
   StarIcon,
   StarFillIcon,
   TriangleUpIcon,
   TriangleDownIcon,
-  ChevronLeftIcon,
-  ChevronRightIcon,
 } from '@primer/octicons-react';
-import type { Issue } from '@/types/entities';
+import type { Issue, Pull } from '@/types/entities';
 import { IssueStatusBadge } from '@/components/StatusBadge';
 import { formatRelativeTime, isRecent } from '@/lib/format';
 import { useTrackedRepos } from '@/lib/tracked-repos';
 import ContentViewer from '@/components/ContentViewer';
 import { useSettings } from '@/lib/settings';
 import { useSn74Repos, lookupWeight } from '@/lib/use-sn74-repos';
+import { InlinePagination as TablePagination } from '@/components/repo-explorer/Pagination';
 
 type SortKey = 'opened' | 'closed' | 'updated' | 'comments' | 'repo' | 'weight' | 'number';
 type SortDir = 'asc' | 'desc';
 type StateFilter = 'all' | 'open' | 'completed' | 'not_planned' | 'duplicate' | 'closed_other';
 type AuthorTarget = { owner: string; name: string; repoFullName: string; login: string; association: string | null };
+type RelatedPopoverLayout = { placement: 'down' | 'up'; maxHeight: number };
+type LinkedPull = { number: number; title: string; state: string; draft: number; merged: number; author_login: string | null };
+
+interface AggIssue extends Issue {
+  linked_prs?: LinkedPull[];
+}
 
 const STATE_OPTS: { id: StateFilter; label: string }[] = [
   { id: 'all', label: 'All states' },
@@ -56,7 +62,7 @@ interface IssuesResp {
   total_pages: number;
   authors: Array<{ login: string; count: number }>;
   author_count: number;
-  issues: Issue[];
+  issues: AggIssue[];
 }
 
 interface UserReposResp {
@@ -74,6 +80,50 @@ const issueRowCellSx = {
   lineHeight: '20px',
 };
 
+const EMPTY_PRS: LinkedPull[] = [];
+const DEFAULT_RELATED_POPOVER_LAYOUT: RelatedPopoverLayout = { placement: 'down', maxHeight: 420 };
+
+function relatedPopoverLayout(anchor: HTMLElement | null, rowCount: number): RelatedPopoverLayout {
+  if (!anchor || typeof window === 'undefined') return DEFAULT_RELATED_POPOVER_LAYOUT;
+  const rect = anchor.getBoundingClientRect();
+  const estimatedHeight = Math.min(480, 36 + rowCount * 32);
+  const spaceBelow = window.innerHeight - rect.bottom - 44;
+  const spaceAbove = rect.top - 8;
+  const placement = spaceBelow >= estimatedHeight || spaceBelow >= spaceAbove ? 'down' : 'up';
+  const available = Math.max(120, placement === 'down' ? spaceBelow : spaceAbove);
+  return { placement, maxHeight: Math.min(480, available) };
+}
+
+function relatedPopoverOffset(layout: RelatedPopoverLayout) {
+  return layout.placement === 'up'
+    ? { bottom: '100%', mb: 1 }
+    : { top: '100%', mt: 1 };
+}
+
+function useRelatedPopoverLayout(
+  open: boolean,
+  rowCount: number,
+  anchorRef: React.RefObject<HTMLDivElement | null>,
+) {
+  const [layout, setLayout] = useState<RelatedPopoverLayout>(DEFAULT_RELATED_POPOVER_LAYOUT);
+  const update = useCallback(() => {
+    setLayout(relatedPopoverLayout(anchorRef.current, rowCount));
+  }, [anchorRef, rowCount]);
+
+  useEffect(() => {
+    if (!open) return;
+    update();
+    window.addEventListener('resize', update);
+    window.addEventListener('scroll', update, true);
+    return () => {
+      window.removeEventListener('resize', update);
+      window.removeEventListener('scroll', update, true);
+    };
+  }, [open, update]);
+
+  return [layout, update] as const;
+}
+
 export default function IssuesTable() {
   const { repos: sn74Repos, weights: repoWeights, isSuccess: sn74ReposReady } = useSn74Repos();
   const [query, setQuery] = useState('');
@@ -84,6 +134,7 @@ export default function IssuesTable() {
   const [page, setPage] = useState(1);
   const [authorFilter, setAuthorFilter] = useState<string>('all');
   const [openIssue, setOpenIssue] = useState<Issue | null>(null);
+  const [openPull, setOpenPull] = useState<Pull | null>(null);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [authorTarget, setAuthorTarget] = useState<AuthorTarget | null>(null);
 
@@ -150,6 +201,7 @@ export default function IssuesTable() {
     if (!issue.author_login) return;
     const [owner, name] = issue.repo_full_name.split('/');
     setOpenIssue(null);
+    setOpenPull(null);
     setExpandedKey(null);
     setAuthorTarget({
       owner,
@@ -170,6 +222,27 @@ export default function IssuesTable() {
     }
     setExpandedKey(null);
     setOpenIssue(issue);
+  };
+
+  const openPullFromAuthor = (pull: Pull) => {
+    setAuthorTarget(null);
+    setOpenIssue(null);
+    setExpandedKey(null);
+    setOpenPull(pull);
+  };
+
+  const openLinkedPullRequest = async (repoFullName: string, prNumber: number) => {
+    setAuthorTarget(null);
+    setOpenIssue(null);
+    setExpandedKey(null);
+    const [owner, name] = repoFullName.split('/');
+    try {
+      const r = await fetch(`/api/pull/${owner}/${name}/${prNumber}`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setOpenPull((await r.json()) as Pull);
+    } catch (err) {
+      console.warn('[issues] could not open linked PR:', err);
+    }
   };
 
   const issuesParams = useMemo(() => {
@@ -299,7 +372,7 @@ export default function IssuesTable() {
             )}
           </Box>
           {data && data.count > 0 && (
-            <IssuesPagination
+            <TablePagination
               page={safePage}
               totalPages={totalPages}
               totalItems={totalItems}
@@ -316,7 +389,7 @@ export default function IssuesTable() {
       </Box>
 
       <Box sx={{ border: '1px solid', borderColor: 'border.default', borderRadius: 2, overflowX: 'auto', overflowY: 'hidden', bg: 'canvas.default' }}>
-        <Box as="table" sx={{ width: '100%', minWidth: 1040, borderCollapse: 'collapse', fontSize: 1 }}>
+        <Box as="table" sx={{ width: '100%', minWidth: 1120, borderCollapse: 'collapse', fontSize: 1 }}>
           <Box
             as="thead"
             sx={{ bg: 'canvas.subtle', borderBottom: '1px solid', borderColor: 'border.default' }}
@@ -343,12 +416,13 @@ export default function IssuesTable() {
               <HeaderCell label="Comments" onClick={() => toggleSort('comments')} active={sortKey === 'comments'} dir={sortDir} align="right" />
               <HeaderCell label="Opened" onClick={() => toggleSort('opened')} active={sortKey === 'opened'} dir={sortDir} />
               <HeaderCell label="Closed" onClick={() => toggleSort('closed')} active={sortKey === 'closed'} dir={sortDir} />
+              <Box as="th" sx={{ ...headerCellSx, textAlign: 'center' }}>PRs</Box>
             </Box>
           </Box>
           <Box as="tbody">
             {isLoading && rows.length === 0 && (
               <Box as="tr">
-                <Box as="td" colSpan={9} sx={{ p: 0 }}>
+                <Box as="td" colSpan={10} sx={{ p: 0 }}>
                   <TableRowsSkeleton
                     rows={12}
                     cols={[
@@ -361,6 +435,7 @@ export default function IssuesTable() {
                       { width: 60 },
                       { width: 60 },
                       { width: 60 },
+                      { width: 60 },
                     ]}
                   />
                 </Box>
@@ -368,7 +443,7 @@ export default function IssuesTable() {
             )}
             {!isLoading && rows.length === 0 && (
               <Box as="tr">
-                <Box as="td" colSpan={9} sx={{ p: 4, textAlign: 'center', color: 'fg.muted' }}>
+                <Box as="td" colSpan={10} sx={{ p: 4, textAlign: 'center', color: 'fg.muted' }}>
                   {data && data.count === 0
                     ? 'No issues cached for current repositories yet. Visit a repo page or run the poller to populate.'
                     : 'No issues match these filters.'}
@@ -389,10 +464,12 @@ export default function IssuesTable() {
                     onAuthorClick={() => openAuthorDetails(issue)}
                     expanded={expanded}
                     weight={lookupWeight(displayWeights, issue.repo_full_name) ?? 0}
+                    linkedPRs={issue.linked_prs ?? EMPTY_PRS}
+                    onPRClick={(prNumber) => openLinkedPullRequest(issue.repo_full_name, prNumber)}
                   />
                   {expanded && settings.contentDisplay === 'accordion' && (
                     <Box as="tr">
-                      <Box as="td" colSpan={9} sx={{ p: 0 }}>
+                      <Box as="td" colSpan={10} sx={{ p: 0 }}>
                         <ContentViewer
                           target={{ kind: 'issue', owner: o, name: n, number: issue.number, preloaded: issue }}
                           mode="inline"
@@ -410,7 +487,7 @@ export default function IssuesTable() {
 
       {data && data.count > 0 && (
         <Box sx={{ mt: 3, display: 'flex', justifyContent: 'flex-end' }}>
-          <IssuesPagination
+          <TablePagination
             page={safePage}
             totalPages={totalPages}
             totalItems={totalItems}
@@ -465,18 +542,60 @@ export default function IssuesTable() {
               zIndex: 110,
             }}
           >
-            <AuthorSidebar
+            <AuthorActivitySidebar
               owner={authorTarget.owner}
               name={authorTarget.name}
               repoFullName={authorTarget.repoFullName}
               login={authorTarget.login}
               initialAssociation={authorTarget.association}
+              initialTab="issues"
               onClose={() => setAuthorTarget(null)}
               onIssueClick={openIssueFromAuthor}
+              onPullClick={openPullFromAuthor}
             />
           </Box>
         </>
       )}
+
+      {openPull && settings.contentDisplay === 'modal' && (() => {
+        const [o, n] = openPull.repo_full_name.split('/');
+        return (
+          <ContentViewer
+            target={{ kind: 'pull', owner: o, name: n, number: openPull.number, preloaded: openPull }}
+            mode="modal"
+            onClose={() => setOpenPull(null)}
+          />
+        );
+      })()}
+
+      {openPull && settings.contentDisplay !== 'modal' && (() => {
+        const [o, n] = openPull.repo_full_name.split('/');
+        return (
+          <Box
+            sx={{
+              position: 'fixed',
+              top: 'var(--header-height)',
+              right: 0,
+              bottom: 0,
+              width: 480,
+              maxWidth: '50vw',
+              borderLeft: '1px solid',
+              borderColor: 'var(--border-default)',
+              bg: 'var(--bg-canvas)',
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+              zIndex: 90,
+            }}
+          >
+            <ContentViewer
+              target={{ kind: 'pull', owner: o, name: n, number: openPull.number, preloaded: openPull }}
+              mode="side"
+              onClose={() => setOpenPull(null)}
+            />
+          </Box>
+        );
+      })()}
 
       {openIssue && settings.contentDisplay === 'side' && (() => {
         const [o, n] = openIssue.repo_full_name.split('/');
@@ -508,103 +627,6 @@ export default function IssuesTable() {
         );
       })()}
     </Box>
-  );
-}
-
-function IssuesPagination({
-  page,
-  totalPages,
-  totalItems,
-  pageSize,
-  onChange,
-  onPageSizeChange,
-  rawPageSize,
-}: {
-  page: number;
-  totalPages: number;
-  totalItems: number;
-  pageSize: number;
-  onChange: (next: number) => void;
-  onPageSizeChange?: (size: number) => void;
-  rawPageSize?: number;
-}) {
-  const start = totalItems === 0 ? 0 : (page - 1) * pageSize + 1;
-  const end = Math.min(page * pageSize, totalItems);
-  const canPrev = page > 1;
-  const canNext = page < totalPages;
-
-  const navBtn = (label: React.ReactNode, target: number, disabled: boolean, aria: string) => (
-    <button
-      key={aria}
-      type="button"
-      onClick={() => onChange(target)}
-      disabled={disabled}
-      aria-label={aria}
-      title={aria}
-      className="gt-pag-btn"
-      data-disabled={disabled ? 'true' : 'false'}
-    >
-      {label}
-    </button>
-  );
-
-  return (
-    <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 2, fontSize: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-      <Text sx={{ color: 'var(--fg-muted)', whiteSpace: 'nowrap' }}>
-        <strong>{start}</strong>–<strong>{end}</strong> of <strong>{totalItems}</strong>
-      </Text>
-      {onPageSizeChange && (
-        <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 1 }}>
-          <Text sx={{ color: 'var(--fg-muted)', whiteSpace: 'nowrap' }}>Rows</Text>
-          <Dropdown
-            value={String(rawPageSize && rawPageSize > 0 ? rawPageSize : pageSize)}
-            onChange={(v) => onPageSizeChange(parseInt(v, 10))}
-            options={[
-              { value: '10', label: '10' },
-              { value: '25', label: '25' },
-              { value: '50', label: '50' },
-              { value: '100', label: '100' },
-            ]}
-            width={72}
-            size="small"
-            ariaLabel="Rows per page"
-          />
-        </Box>
-      )}
-      <Box className="gt-pag-group">
-        {navBtn(<DoubleChevron dir="left" />, 1, !canPrev, 'First page')}
-        {navBtn(<ChevronLeftIcon size={14} />, page - 1, !canPrev, 'Previous page')}
-        <Box className="gt-pag-label">
-          <Text sx={{ color: 'var(--fg-default)', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
-            {page}
-          </Text>
-          <Text sx={{ color: 'var(--fg-muted)', mx: '4px' }}>/</Text>
-          <Text sx={{ color: 'var(--fg-muted)', fontVariantNumeric: 'tabular-nums' }}>
-            {totalPages}
-          </Text>
-        </Box>
-        {navBtn(<ChevronRightIcon size={14} />, page + 1, !canNext, 'Next page')}
-        {navBtn(<DoubleChevron dir="right" />, totalPages, !canNext, 'Last page')}
-      </Box>
-    </Box>
-  );
-}
-
-function DoubleChevron({ dir }: { dir: 'left' | 'right' }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-      {dir === 'left' ? (
-        <>
-          <path d="M9.78 4.22a.75.75 0 0 1 0 1.06L7.06 8l2.72 2.72a.75.75 0 1 1-1.06 1.06L5.47 8.53a.75.75 0 0 1 0-1.06l3.25-3.25a.75.75 0 0 1 1.06 0Z" fill="currentColor" />
-          <path d="M5.78 4.22a.75.75 0 0 1 0 1.06L3.06 8l2.72 2.72a.75.75 0 1 1-1.06 1.06L1.47 8.53a.75.75 0 0 1 0-1.06l3.25-3.25a.75.75 0 0 1 1.06 0Z" fill="currentColor" />
-        </>
-      ) : (
-        <>
-          <path d="M6.22 4.22a.75.75 0 0 1 1.06 0l3.25 3.25a.75.75 0 0 1 0 1.06l-3.25 3.25a.75.75 0 1 1-1.06-1.06L8.94 8 6.22 5.28a.75.75 0 0 1 0-1.06Z" fill="currentColor" />
-          <path d="M10.22 4.22a.75.75 0 0 1 1.06 0l3.25 3.25a.75.75 0 0 1 0 1.06l-3.25 3.25a.75.75 0 1 1-1.06-1.06L12.94 8l-2.72-2.72a.75.75 0 0 1 0-1.06Z" fill="currentColor" />
-        </>
-      )}
-    </svg>
   );
 }
 
@@ -659,13 +681,17 @@ function IssueTableRow({
   onToggleTrack,
   onRowClick,
   onAuthorClick,
+  linkedPRs,
+  onPRClick,
   expanded,
 }: {
-  issue: Issue;
+  issue: AggIssue;
   tracked: boolean;
   onToggleTrack?: () => void;
   onRowClick?: () => void;
   onAuthorClick?: () => void;
+  linkedPRs: LinkedPull[];
+  onPRClick: (prNumber: number) => void | Promise<void>;
   expanded?: boolean;
   weight: number;
 }) {
@@ -858,8 +884,212 @@ function IssueTableRow({
       >
         <RecentTime iso={issue.closed_at} />
       </Box>
+      <Box as="td" sx={{ ...issueRowCellSx, textAlign: 'center', whiteSpace: 'nowrap' }}>
+        <RelatedPRsCell prs={linkedPRs} onPRClick={onPRClick} />
+      </Box>
     </Box>
   );
+}
+
+function RelatedPRsCell({
+  prs,
+  onPRClick,
+}: {
+  prs: LinkedPull[];
+  onPRClick?: (prNumber: number) => void | Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [popoverLayout, updatePopoverLayout] = useRelatedPopoverLayout(open, prs.length, wrapRef);
+
+  useEffect(() => {
+    if (!open) return;
+    const onMouseDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  if (prs.length === 0) {
+    return <Text sx={{ color: 'var(--fg-muted)', fontFamily: 'mono', fontSize: 0 }}>—</Text>;
+  }
+
+  const merged = prs.filter((p) => p.merged).length;
+  const openCount = prs.filter((p) => !p.merged && p.state === 'open').length;
+  const tone = openCount > 0 ? 'var(--success-emphasis)' : merged > 0 ? 'var(--done-emphasis)' : 'var(--fg-muted)';
+
+  return (
+    <Box
+      ref={wrapRef as unknown as React.Ref<HTMLDivElement>}
+      sx={{ position: 'relative', display: 'inline-block' }}
+      onClick={(e: React.MouseEvent) => {
+        e.stopPropagation();
+        if (!open) updatePopoverLayout();
+        setOpen((v) => !v);
+      }}
+    >
+      <Box
+        as="button"
+        title={`${prs.length} PR${prs.length === 1 ? '' : 's'} reference this issue`}
+        sx={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 1,
+          px: '8px',
+          py: '3px',
+          border: '1px solid',
+          borderColor: 'var(--border-default)',
+          borderRadius: '999px',
+          bg: 'var(--bg-canvas)',
+          color: tone,
+          fontSize: '12px',
+          fontWeight: 700,
+          cursor: 'pointer',
+          fontFamily: 'inherit',
+          '&:hover': { borderColor: tone },
+        }}
+      >
+        <GitPullRequestIcon size={11} />
+        {prs.length}
+      </Box>
+      {open && (
+        <Box
+          sx={{
+            position: 'absolute',
+            ...relatedPopoverOffset(popoverLayout),
+            right: 0,
+            minWidth: 280,
+            maxWidth: 360,
+            maxHeight: popoverLayout.maxHeight,
+            overflowY: 'auto',
+            bg: 'var(--bg-subtle)',
+            border: '1px solid',
+            borderColor: 'var(--border-default)',
+            borderRadius: 2,
+            boxShadow: 'var(--shadow-overlay)',
+            zIndex: 50,
+            py: 1,
+            textAlign: 'left',
+          }}
+        >
+          <Text sx={{ px: 2, py: 1, fontSize: 0, color: 'var(--fg-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block' }}>
+            Linked pull requests
+          </Text>
+          {prs.map((pr) => {
+            const status = pr.merged ? 'merged' : pr.draft ? 'draft' : pr.state === 'open' ? 'open' : 'closed';
+            const statusColor =
+              status === 'merged' ? 'var(--done-emphasis)' :
+              status === 'open' ? 'var(--success-emphasis)' :
+              status === 'draft' ? 'var(--fg-muted)' :
+              'var(--danger-fg)';
+            return (
+              <button
+                key={pr.number}
+                onClick={(e: React.MouseEvent) => {
+                  e.stopPropagation();
+                  setOpen(false);
+                  void onPRClick?.(pr.number);
+                }}
+                onMouseEnter={highlightRelatedRow}
+                onMouseLeave={unhighlightRelatedRow}
+                style={relatedPopoverRowStyle}
+              >
+                {pr.author_login ? (
+                  <span style={relatedPopoverAuthorStyle}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={`https://github.com/${pr.author_login}.png?size=32`}
+                      alt={pr.author_login}
+                      loading="lazy"
+                      style={{ width: 16, height: 16, borderRadius: '50%', border: '1px solid var(--border-muted)', display: 'block', flexShrink: 0 }}
+                    />
+                    <span style={relatedPopoverAuthorTextStyle}>
+                      {pr.author_login}
+                    </span>
+                  </span>
+                ) : (
+                  <GitPullRequestIcon size={12} />
+                )}
+                <span style={{ ...relatedPopoverStatusTextStyle, color: statusColor }}>
+                  {status}
+                </span>
+                <span style={relatedPopoverTitleStyle}>
+                  #{pr.number} {pr.title}
+                </span>
+              </button>
+            );
+          })}
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+const relatedPopoverRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  width: '100%',
+  padding: '6px 8px',
+  border: 'none',
+  background: 'transparent',
+  color: 'inherit',
+  fontFamily: 'inherit',
+  fontSize: 'inherit',
+  textAlign: 'left',
+  cursor: 'pointer',
+};
+
+const relatedPopoverAuthorStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  flexShrink: 0,
+  minWidth: 0,
+  maxWidth: 110,
+};
+
+const relatedPopoverAuthorTextStyle: React.CSSProperties = {
+  color: 'var(--fg-default)',
+  fontSize: 12,
+  fontWeight: 500,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+const relatedPopoverStatusTextStyle: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 700,
+  textTransform: 'capitalize',
+  flexShrink: 0,
+};
+
+const relatedPopoverTitleStyle: React.CSSProperties = {
+  color: 'var(--fg-default)',
+  fontSize: 12,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  flex: 1,
+};
+
+function highlightRelatedRow(e: React.MouseEvent<HTMLButtonElement>) {
+  e.currentTarget.style.background = 'var(--bg-emphasis)';
+}
+
+function unhighlightRelatedRow(e: React.MouseEvent<HTMLButtonElement>) {
+  e.currentTarget.style.background = 'transparent';
 }
 
 const RecentTime = React.memo(function RecentTime({ iso }: { iso: string | null | undefined }) {
