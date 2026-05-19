@@ -37,6 +37,7 @@ import { useMinerLogin } from '@/lib/use-miner';
 import Dropdown from '@/components/Dropdown';
 import ContentViewer from '@/components/ContentViewer';
 import AuthorCredibilityNote from '@/components/AuthorCredibilityNote';
+import RelatedPRsCell, { type LinkedPullReference } from '@/components/RelatedPRsCell';
 import { IssueLabels } from '@/components/IssueLabels';
 import SearchInput from '@/components/SearchInput';
 import AuthorFilter from '@/components/AuthorFilter';
@@ -72,7 +73,7 @@ interface RepoBadgesResponse {
 // Stable empty array so the relatedPRs fallback doesn't break React.memo on
 // rows with no linked PRs (otherwise `?? []` creates a fresh reference each
 // render, defeating prop equality).
-const EMPTY_PRS: Array<{ number: number; title: string; state: string; merged: number; draft: number; author_login?: string | null }> = [];
+const EMPTY_PRS: LinkedPullReference[] = [];
 const EMPTY_ISSUES: Array<{ number: number; title: string; state: string; state_reason: string | null; author_login: string | null }> = [];
 
 const DEFAULT_RELATED_POPOVER_LAYOUT: RelatedPopoverLayout = { placement: 'down', maxHeight: 420 };
@@ -2576,149 +2577,6 @@ const ExplorerIssueRow = React.memo(function ExplorerIssueRow({
   prev.onAuthorClick === next.onAuthorClick,
 );
 
-function RelatedPRsCell({
-  prs,
-  onPRClick,
-}: {
-  prs: Array<{ number: number; title: string; state: string; merged: number; draft: number; author_login?: string | null }>;
-  onPRClick?: (prNumber: number) => void | Promise<void>;
-}) {
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-  const [popoverLayout, updatePopoverLayout] = useRelatedPopoverLayout(open, prs.length, wrapRef);
-
-  useEffect(() => {
-    if (!open) return;
-    const onMouseDown = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('mousedown', onMouseDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onMouseDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
-
-  if (prs.length === 0) {
-    return <Text sx={{ color: 'var(--fg-muted)', fontFamily: 'mono', fontSize: 0 }}>—</Text>;
-  }
-  const merged = prs.filter((p) => p.merged).length;
-  const open_ = prs.filter((p) => !p.merged && p.state === 'open').length;
-  const tone = open_ > 0 ? 'var(--success-emphasis)' : merged > 0 ? 'var(--done-emphasis)' : 'var(--fg-muted)';
-
-  return (
-    <Box
-      ref={wrapRef as unknown as React.Ref<HTMLDivElement>}
-      sx={{ position: 'relative', display: 'inline-block' }}
-      onClick={(e: React.MouseEvent) => {
-        e.stopPropagation();
-        if (!open) updatePopoverLayout();
-        setOpen((v) => !v);
-      }}
-    >
-      <Box
-        as="button"
-        title={`${prs.length} PR${prs.length === 1 ? '' : 's'} reference this issue`}
-        sx={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 1,
-          px: '8px',
-          py: '3px',
-          border: '1px solid',
-          borderColor: 'var(--border-default)',
-          borderRadius: '999px',
-          bg: 'var(--bg-canvas)',
-          color: tone,
-          fontSize: '12px',
-          fontWeight: 700,
-          cursor: 'pointer',
-          fontFamily: 'inherit',
-          '&:hover': { borderColor: tone },
-        }}
-      >
-        <GitPullRequestIcon size={11} />
-        {prs.length}
-      </Box>
-      {open && (
-        <Box
-          sx={{
-            position: 'absolute',
-            ...relatedPopoverOffset(popoverLayout),
-            right: 0,
-            minWidth: 280,
-            maxWidth: 360,
-            maxHeight: popoverLayout.maxHeight,
-            overflowY: 'auto',
-            bg: 'var(--bg-subtle)',
-            border: '1px solid',
-            borderColor: 'var(--border-default)',
-            borderRadius: 2,
-            boxShadow: 'var(--shadow-overlay)',
-            zIndex: 50,
-            py: 1,
-            textAlign: 'left',
-          }}
-        >
-          <Text sx={{ px: 2, py: 1, fontSize: 0, color: 'var(--fg-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block' }}>
-            Linked pull requests
-          </Text>
-          {prs.map((pr) => {
-            const status = pr.merged ? 'merged' : pr.draft ? 'draft' : pr.state === 'open' ? 'open' : 'closed';
-            const statusColor =
-              status === 'merged' ? 'var(--done-emphasis)' :
-              status === 'open' ? 'var(--success-emphasis)' :
-              status === 'draft' ? 'var(--fg-muted)' :
-              'var(--danger-fg)';
-            return (
-              <button
-                key={pr.number}
-                onClick={(e: React.MouseEvent) => {
-                  e.stopPropagation();
-                  setOpen(false);
-                  void onPRClick?.(pr.number);
-                }}
-                onMouseEnter={highlightRelatedRow}
-                onMouseLeave={unhighlightRelatedRow}
-                style={relatedPopoverRowStyle}
-              >
-                {pr.author_login ? (
-                  <span style={relatedPopoverAuthorStyle}>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={`https://github.com/${pr.author_login}.png?size=32`}
-                      alt={pr.author_login}
-                      loading="lazy"
-                      style={{ width: 16, height: 16, borderRadius: '50%', border: '1px solid var(--border-muted)', display: 'block', flexShrink: 0 }}
-                    />
-                    <span style={relatedPopoverAuthorTextStyle}>
-                      {pr.author_login}
-                    </span>
-                  </span>
-                ) : (
-                  <GitPullRequestIcon size={12} />
-                )}
-                <span style={{ ...relatedPopoverStatusTextStyle, color: statusColor }}>
-                  {status}
-                </span>
-                <span style={relatedPopoverTitleStyle}>
-                  #{pr.number} {pr.title}
-                </span>
-              </button>
-            );
-          })}
-        </Box>
-      )}
-    </Box>
-  );
-}
-
 /** Inline cell for the PR table: shows a count badge with a popover listing
  *  the issues this PR closes/fixes/references. Mirrors RelatedPRsCell so the
  *  two columns feel consistent. */
@@ -2904,13 +2762,6 @@ const relatedPopoverAuthorTextStyle: React.CSSProperties = {
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
-};
-
-const relatedPopoverStatusTextStyle: React.CSSProperties = {
-  fontSize: 12,
-  fontWeight: 700,
-  textTransform: 'capitalize',
-  flexShrink: 0,
 };
 
 const relatedPopoverTitleStyle: React.CSSProperties = {

@@ -57,7 +57,7 @@ interface AuthorIssuesResponse {
   issues: Array<Issue & { merged_pr_count: number }>;
 }
 
-export default function PullAuthorSidebar({
+export default function AuthorActivitySidebar({
   owner,
   name,
   repoFullName,

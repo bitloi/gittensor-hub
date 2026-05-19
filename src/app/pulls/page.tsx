@@ -21,7 +21,7 @@ import { TableRowsSkeleton } from '@/components/Skeleton';
 import Dropdown from '@/components/Dropdown';
 import SearchInput from '@/components/SearchInput';
 import AuthorFilter from '@/components/AuthorFilter';
-import PullAuthorSidebar from '@/components/PullAuthorSidebar';
+import AuthorActivitySidebar from '@/components/AuthorActivitySidebar';
 import AuthorCredibilityNote from '@/components/AuthorCredibilityNote';
 import type { Issue, Pull } from '@/types/entities';
 import ContentViewer from '@/components/ContentViewer';
@@ -485,7 +485,7 @@ export default function AllPullsPage() {
               zIndex: 110,
             }}
           >
-            <PullAuthorSidebar
+            <AuthorActivitySidebar
               owner={authorTarget.owner}
               name={authorTarget.name}
               repoFullName={authorTarget.repoFullName}
