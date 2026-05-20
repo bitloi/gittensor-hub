@@ -345,7 +345,19 @@ export default function AllPullsPage() {
             </Box>
           </Box>
 
-          <Box sx={{ border: '1px solid', borderColor: 'var(--border-default)', borderRadius: 2, overflowX: 'auto', overflowY: 'hidden', bg: 'var(--bg-canvas)' }}>
+          <Box
+            sx={{
+              border: '1px solid',
+              borderColor: 'var(--border-default)',
+              borderRadius: 2,
+              overflowX: 'auto',
+              overflowY: 'hidden',
+              bg: 'var(--bg-canvas)',
+              scrollbarWidth: 'none',
+              msOverflowStyle: 'none',
+              '&::-webkit-scrollbar': { display: 'none' },
+            }}
+          >
             <Box as="table" sx={{ width: '100%', minWidth: 1200, borderCollapse: 'collapse', fontSize: 1 }}>
               <Box as="thead" sx={{ bg: 'var(--bg-subtle)', borderBottom: '1px solid', borderColor: 'var(--border-default)' }}>
                 <Box as="tr">
