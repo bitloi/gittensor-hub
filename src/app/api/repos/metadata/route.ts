@@ -16,7 +16,7 @@ import { getLiveReposAsyncServer } from '@/lib/repos-server';
 export const dynamic = 'force-dynamic';
 
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1h — metadata churn is slow
-const PER_REPO_TIMEOUT_MS = 12_000;  // per-repo cap so one slow call can't stall the whole batch
+const PER_REPO_TIMEOUT_MS = 30_000;  // per-repo cap; covers up to ~10 sequential search pages + one rate-limit cooldown without falling back to stale cache
 const CONCURRENCY = 4;               // GitHub secondary rate limits punish bursts; throttle ourselves
 /** How long to wait before re-trying a repo that came back without langs.
  *  Independent of CACHE_TTL_MS — a transient 5xx shouldn't sentence a repo
@@ -85,6 +85,46 @@ function parseLastPage(linkHeader: string | undefined): number | null {
   return match ? parseInt(match[1], 10) : null;
 }
 
+/** Search-API fetch of issues *created* in the last 30 days. Uses
+ *  `is:issue created:>=DATE` so PRs are filtered server-side — the older
+ *  `issues.listForRepo` path returned issues+PRs combined and the
+ *  per_page=100 cap was being exhausted by PRs on active repos
+ *  (e.g. on ragflow we'd see ~29 of 240 real issues). Search is capped
+ *  at 100/page and 1000 total — paginate up to 10 pages. Uses the
+ *  search-quota lane in withRotation (30/min per PAT). */
+async function fetchIssueCreates30d(
+  owner: string,
+  name: string,
+  thirtyDaysAgoIso: string,
+): Promise<{ items: Array<{ created_at?: string }>; totalCount: number; hardCapped: boolean; incomplete: boolean }> {
+  const q = `repo:${owner}/${name} is:issue created:>=${thirtyDaysAgoIso}`;
+  const items: Array<{ created_at?: string }> = [];
+  let totalCount = 0;
+  let hardCapped = false;
+  let incomplete = false;
+  for (let page = 1; page <= 10; page++) {
+    const resp = await withRotation(
+      (o) =>
+        o.search.issuesAndPullRequests({
+          q,
+          sort: 'created',
+          order: 'desc',
+          per_page: 100,
+          page,
+        }),
+      { kind: 'search' },
+    );
+    totalCount = resp.data.total_count;
+    if (resp.data.incomplete_results) incomplete = true;
+    const batch = resp.data.items as Array<{ created_at?: string }>;
+    items.push(...batch);
+    if (batch.length < 100) break;
+    if (items.length >= totalCount) break;
+    if (page === 10 && items.length < totalCount) hardCapped = true;
+  }
+  return { items, totalCount, hardCapped, incomplete };
+}
+
 /** Retry a sub-call on transient errors (5xx / network). 404s and auth
  *  errors bubble immediately — no point retrying those. Rate-limit
  *  rotation already happens inside withRotation. */
@@ -113,7 +153,7 @@ async function retrySubcall<T>(fn: () => Promise<T>): Promise<T> {
  *  docs-only repo) — we wait EMPTY_LANGS_RETRY_MS between retries. */
 const lastAttemptAt = new Map<string, number>();
 
-/** Per-repo "issues.listForRepo succeeded since process start". Lets the
+/** Per-repo "search issues succeeded since process start". Lets the
  *  partial-refresh helper distinguish "fetched and genuinely empty"
  *  (legit quiet repo) from "fetch failed → seeded with zeros" (needs
  *  retry). Without this, the empty-array sentinel is indistinguishable
@@ -161,27 +201,13 @@ async function refresh(): Promise<CacheEntry> {
         retrySubcall(() =>
           withRotation((o) => o.pulls.list({ owner, repo: name, state: 'open', per_page: 1 })),
         ),
-        // 30-day issue history. GitHub's `issues` endpoint returns BOTH
-        // issues and PRs (PRs are technically issues with a
-        // `pull_request` field); we filter PRs out client-side. The
-        // `since` parameter filters by `updated_at` (not `created_at`),
-        // so this returns any issue *touched* in 30 days — including
-        // old issues with recent comments. We then bin by `created_at`
-        // and drop out-of-window ones. Wastes some bandwidth but
-        // simpler than paginating sorted-by-created.
-        // `per_page: 100` cap: at SN74 scale (~few/day) this is safe;
-        // a busy repo with >100 touched issues in 30 days would lose
-        // the oldest creates first (default sort = created desc).
-        retrySubcall(() =>
-          withRotation((o) =>
-            o.issues.listForRepo({
-              owner, repo: name,
-              state: 'all',
-              since: thirtyDaysAgoIso,
-              per_page: 100,
-            }),
-          ),
-        ),
+        // 30-day issue history via the search API. `is:issue` filters
+        // PRs server-side so the per-page budget isn't burned on PRs
+        // (the older `issues.listForRepo` path returned both combined
+        // and the 100-row cap was exhausted by PRs on any active repo).
+        // See `fetchIssueCreates30d` for the pagination + 1000-row
+        // hard cap handling.
+        retrySubcall(() => fetchIssueCreates30d(owner, name, thirtyDaysAgoIso)),
       ]),
       PER_REPO_TIMEOUT_MS,
       `repos/metadata ${r.fullName}`,
@@ -220,21 +246,21 @@ async function refresh(): Promise<CacheEntry> {
       console.warn(`[repos/metadata] ${r.fullName} pulls.list failed:`, errMsg(pullsResult.reason));
     }
 
-    // Issue-creation sparkline. Drop entries with a `pull_request` field
-    // (GitHub returns PRs through this endpoint too) and bin by created_at
-    // into a 30-day oldest-first array.
+    // Issue-creation sparkline. Search API has already filtered PRs and
+    // already filtered by created_at server-side; bin by date into a
+    // 30-day oldest-first array. The bin filter still drops anything
+    // outside the window as a safety net against day-boundary drift.
     let dailyIssues30d: number[] = prior?.dailyIssues30d ?? new Array(30).fill(0);
     if (issuesResult.status === 'fulfilled') {
-      const data = issuesResult.value.data as Array<{ created_at?: string; pull_request?: unknown }>;
-      if (data.length === 100) {
-        // Hit the per_page cap → busier repo than expected, oldest
-        // creates may have been truncated. Surface in the log so we
-        // know when to add pagination.
-        console.warn(`[repos/metadata] ${r.fullName} issues.listForRepo returned 100 (cap) — older creates may be truncated`);
+      const { items, totalCount, hardCapped, incomplete } = issuesResult.value;
+      if (hardCapped) {
+        console.warn(`[repos/metadata] ${r.fullName} search hit 1000-row hard cap (total_count=${totalCount}) — extreme outlier`);
+      }
+      if (incomplete) {
+        console.warn(`[repos/metadata] ${r.fullName} search returned incomplete_results — bins may undercount until GitHub re-indexes`);
       }
       const bins = new Array<number>(30).fill(0);
-      for (const it of data) {
-        if (it.pull_request) continue;          // skip PRs
+      for (const it of items) {
         if (!it.created_at) continue;
         const t = Date.parse(it.created_at);
         if (!Number.isFinite(t) || t <= 0) continue;
@@ -248,7 +274,7 @@ async function refresh(): Promise<CacheEntry> {
       okIssues++;
     } else {
       failIssues++;
-      console.warn(`[repos/metadata] ${r.fullName} issues.listForRepo failed:`, errMsg(issuesResult.reason));
+      console.warn(`[repos/metadata] ${r.fullName} search issues failed:`, errMsg(issuesResult.reason));
     }
 
     return [r.fullName, { description, langs, openPrCount, dailyIssues30d }] as const;
@@ -323,18 +349,8 @@ async function refreshMissing(): Promise<void> {
         tasks.push(Promise.resolve(null));
       }
       if (needsIssues) {
-        tasks.push(
-          retrySubcall(() =>
-            withRotation((o) =>
-              o.issues.listForRepo({
-                owner, repo: name,
-                state: 'all',
-                since: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
-                per_page: 100,
-              }),
-            ),
-          ),
-        );
+        const thirtyDaysAgoIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+        tasks.push(retrySubcall(() => fetchIssueCreates30d(owner, name, thirtyDaysAgoIso)));
       } else {
         tasks.push(Promise.resolve(null));
       }
@@ -358,9 +374,8 @@ async function refreshMissing(): Promise<void> {
         const DAY_MS = 24 * 60 * 60 * 1000;
         const todayStart = Math.floor(Date.now() / DAY_MS) * DAY_MS;
         const bins = new Array<number>(30).fill(0);
-        const data = (issuesRes.value as { data: Array<{ created_at?: string; pull_request?: unknown }> }).data;
-        for (const it of data) {
-          if (it.pull_request) continue;
+        const { items } = issuesRes.value as { items: Array<{ created_at?: string }> };
+        for (const it of items) {
           if (!it.created_at) continue;
           const t = Date.parse(it.created_at);
           if (!Number.isFinite(t) || t <= 0) continue;
