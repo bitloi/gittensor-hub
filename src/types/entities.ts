@@ -72,6 +72,21 @@ export interface GtRepo {
   prsLastWeek: number;
   trendingPct: number;
   lastPrAt: string | null;
+  /** Per-day PR creation counts for the last 14 days, oldest first.
+   *  Kept for back-compat with the old velocity sparkline. */
+  dailyPrs14d?: number[];
+  /** 30-day window stats — all use `prCreatedAt` for the window. */
+  prsLast30d?: number;
+  mergedLast30d?: number;
+  closedLast30d?: number;
+  /** Active contributors in the last 30 days (PRs they merged). */
+  contributorsLast30d?: number;
+  /** Per-day PR creation counts for the last 30 days, oldest first.
+   *  Index 0 = 29 days ago, index 29 = today. */
+  dailyPrs30d?: number[];
+  /** Per-day issue-discovery bounty creation counts for the last 30
+   *  days, oldest first. Sibling of dailyPrs30d. */
+  dailyIssues30d?: number[];
 }
 
 /** Recent-PR summary attached to the GtRepos response. */
