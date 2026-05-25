@@ -340,7 +340,7 @@ export default function RepoCard({
             <span>{(r.share * 100).toFixed(3)}% of pool</span>
             <span style={{ color: 'var(--border-strong)' }}>·</span>
             <span className="mono" style={{ color: 'var(--fg-muted)', textTransform: 'none', letterSpacing: 0 }}>
-              {(r.share * OSS_POOL * 100).toFixed(3)}% subnet
+              {(r.share * OSS_POOL * 100).toFixed(3)}% of total emission
             </span>
           </div>
         </div>

@@ -198,7 +198,7 @@ export default function Drawer({
               <span className={styles.textFgMute} style={{ fontSize: 16, marginLeft: 8 }}>TAO/day</span>
             </div>
             <div className="mono" style={{ fontSize: 11, color: 'var(--fg-subtle)', marginBottom: 12 }}>
-              = {subnetTAO} subnet × {(r.share * 100).toFixed(3)}% share × 90% OSS pool
+              = {formatTAO(subnetTAO)} TAO (total miners emission) × {(r.share * 100).toFixed(3)}% share × 90% OSS pool
             </div>
 
             {r.share > 0 && (r.maintCut || 0) > 0 ? (
