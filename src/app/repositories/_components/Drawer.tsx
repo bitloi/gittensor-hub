@@ -883,8 +883,19 @@ function MinerTileContent({
       <span className={styles.mtileTaoUnit}> {eligible ? 'score' : 'base score'}</span>
     </>
   );
-  const shareText = eligible ? `${(share * 100).toFixed(1)}%` : 'ineligible';
+  const shareText = eligible ? `${(share * 100).toFixed(1)}%` : null;
   const taoText = eligible ? `${formatTAO(tao)} T/Day` : '0 T/Day';
+  const metaNode = (
+    <>
+      {shareText ? (
+        <>
+          <span>{shareText}</span>
+          <span className={styles.mtileSep}>·</span>
+        </>
+      ) : null}
+      <span>{taoText}</span>
+    </>
+  );
   // Let the score text inherit from the tile's tier color so it adapts
   // to dark/light mode automatically (was hardcoded `#edf0f2` and
   // disappeared on light backgrounds).
@@ -920,9 +931,7 @@ function MinerTileContent({
             {scoreNode}
           </div>
           <div className={`${styles.mtileMeta} mono`} style={{ fontSize: sizeClass === 'lg' ? undefined : 9.5 }}>
-            <span>{shareText}</span>
-            <span className={styles.mtileSep}>·</span>
-            <span>{taoText}</span>
+            {metaNode}
           </div>
         </div>
       </>
@@ -943,9 +952,7 @@ function MinerTileContent({
             {scoreNode}
           </div>
           <div className={`${styles.mtileMeta} mono`}>
-            <span>{shareText}</span>
-            <span className={styles.mtileSep}>·</span>
-            <span>{taoText}</span>
+            {metaNode}
           </div>
         </div>
       </>
@@ -966,7 +973,7 @@ function MinerTileContent({
             {scoreNode}
           </div>
           <div className={`${styles.mtileMeta} mono`} style={{ fontSize: 9.5 }}>
-            {shareText} · {taoText}
+            {metaNode}
           </div>
         </div>
       </>
