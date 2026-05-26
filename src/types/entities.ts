@@ -243,9 +243,25 @@ export interface RepoMiner {
   githubUsername: string;
   prCount: number;
   score: number;
+  baseScore?: number;
+  collateralScore?: number;
+  openPrCount?: number;
+  closedPrCount?: number;
+  totalPrCount?: number;
+  credibility?: number;
   ossRank: number | null;
   globalScore?: number | null;
+  /** On-chain miner UID — surfaced for the drawer treemap's tile label. */
+  uid?: number | null;
   avatarUrl: string;
+  /** Per-repo eligibility from the validator (`RepoEvaluation.is_eligible`).
+   *  Only set on `ossContributions` rows; `issueDiscoveries` already has its
+   *  own `reason` field. */
+  isEligible?: boolean;
+  failedReason?: string | null;
+  alphaPerDay?: number;
+  taoPerDay?: number;
+  usdPerDay?: number;
   issueCount?: number;
   completedIssueCount?: number;
   otherClosedIssueCount?: number | null;
