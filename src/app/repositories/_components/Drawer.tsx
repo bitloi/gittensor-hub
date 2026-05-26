@@ -683,7 +683,7 @@ function MinersSection({ owner, name, repoPRTAOValue }: { owner: string; name: s
           Active miners
         </div>
         <div style={{ fontSize: 12, color: 'var(--fg-subtle)', fontStyle: 'italic', textAlign: 'center', padding: '24px 0' }}>
-          Benchmark repo — no miners.
+          No miner data available for this repo yet.
         </div>
       </div>
     );

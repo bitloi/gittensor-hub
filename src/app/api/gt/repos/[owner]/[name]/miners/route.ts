@@ -147,7 +147,7 @@ async function fetchRepoMiners(fullName: string): Promise<UpstreamRepoMiner[]> {
       cache: 'no-store',
       signal: AbortSignal.timeout(8_000),
     });
-    if (!r.ok) return [];
+    if (!r.ok) throw new Error(`upstream repo miners ${fullName} ${r.status}`);
     const raw = (await r.json()) as unknown;
     const rows = Array.isArray(raw)
       ? raw

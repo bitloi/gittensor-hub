@@ -17,12 +17,17 @@ export interface SquarifyRect<T> {
   data: T;
 }
 
+export interface SquarifyOptions {
+  sort?: boolean;
+}
+
 export function squarify<T>(
   segs: Array<SquarifyInput<T>>,
   x: number,
   y: number,
   w: number,
   h: number,
+  options: SquarifyOptions = {},
 ): Array<SquarifyRect<T>> {
   if (segs.length === 0 || !Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
     return [];
@@ -38,8 +43,11 @@ export function squarify<T>(
     ? weighted.map((seg) => ({ data: seg.data, area: (seg.w / totalWeight) * totalArea }))
     : weighted.map((seg) => ({ data: seg.data, area: totalArea / weighted.length }))
   )
-    .filter((seg) => seg.area > 0)
-    .sort((a, b) => b.area - a.area);
+    .filter((seg) => seg.area > 0);
+
+  if (options.sort !== false) {
+    items.sort((a, b) => b.area - a.area);
+  }
 
   if (items.length === 0) return [];
 

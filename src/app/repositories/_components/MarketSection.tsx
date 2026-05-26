@@ -580,6 +580,7 @@ function Treemap({
     0,
     1,
     1,
+    { sort: false },
   );
 
   return (
