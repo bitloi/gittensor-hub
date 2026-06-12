@@ -503,6 +503,7 @@ export const REPO_REGISTERED_AT: Record<string, string> = {
   'cogniax/tao-pulse-app': '2026-05-29',
   'e35ventura/taopedia': '2026-05-29',
   'e35ventura/taopedia-articles': '2026-05-29',
+  'anderdc/social-media-manager': '2026-06-09',
 };
 
 const REPO_REGISTERED_MS: Record<string, number> = Object.fromEntries(
