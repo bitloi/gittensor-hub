@@ -525,4 +525,3 @@ export function EarningForecastChart({ series }: { series: ForecastSeries }) {
     </Box>
   );
 }
-

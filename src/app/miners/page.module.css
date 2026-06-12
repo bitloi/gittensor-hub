@@ -4645,8 +4645,8 @@ a.mmDetailChip:hover{
     justify-content: space-between;
   }
 
-  
-  
+
+
   .minerGrid{
     grid-template-columns: 1fr;
   }
@@ -4670,7 +4670,7 @@ a.mmDetailChip:hover{
     padding-left: 7px;
   }
 
-  
+
   }
 
 @media (max-width: 520px) {
@@ -4680,10 +4680,10 @@ a.mmDetailChip:hover{
     gap: 14px;
   }
 
-  
-  
-  
-  
+
+
+
+
   }
 
 /* ═══════════════ Miner earnings distribution (header right panel) ═══════════════ */
