@@ -212,7 +212,7 @@ async function githubRepoPrLabels(repoFullName: string, login: string): Promise<
   try {
     const [owner, repo] = repoFullName.split('/');
     if (owner && repo) {
-      for (let page = 1; page <= 5; page++) {
+      for (let page = 1; page <= 3; page++) {
         const res = await withRotation((octokit) =>
           octokit.issues.listForRepo({ owner, repo, creator: login, state: 'all', per_page: 100, page }),
         );
@@ -233,6 +233,25 @@ async function githubRepoPrLabels(repoFullName: string, login: string): Promise<
   return byNumber;
 }
 
+// Bound the live-GitHub label fallback so opening one modal can't burst the API: at most
+// GH_CONCURRENCY requests in flight and at most GH_MAX_REPOS repos enriched per request
+// (the rest keep their mirror/feed labels). The local mirror stays the primary source.
+const GH_CONCURRENCY = 4;
+const GH_MAX_REPOS = 10;
+
+async function mapLimit<T>(items: T[], limit: number, worker: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      for (;;) {
+        const idx = next++;
+        if (idx >= items.length) return;
+        await worker(items[idx]);
+      }
+    }),
+  );
+}
+
 /** Fill in real GitHub labels for PRs the local mirror/feed left label-less, fetching one
  * listForRepo(creator) per affected repo (cached, in parallel). Only touches PRs with no
  * labels yet — PRs that already have a scoring/raw_json label keep it. */
@@ -243,11 +262,10 @@ async function attachGithubPrLabels(prs: MinerPr[], login: string): Promise<void
   if (needy.size === 0) return;
 
   const maps = new Map<string, Map<number, GhLabel[]>>();
-  await Promise.all(
-    [...needy].map(async (repo) => {
-      maps.set(repo.toLowerCase(), await githubRepoPrLabels(repo, login));
-    }),
-  );
+  // Cap + concurrency-limit the per-repo GitHub fan-out (≤ GH_MAX_REPOS listForRepo flows).
+  await mapLimit([...needy].slice(0, GH_MAX_REPOS), GH_CONCURRENCY, async (repo) => {
+    maps.set(repo.toLowerCase(), await githubRepoPrLabels(repo, login));
+  });
   for (const p of prs) {
     if (p.labels.length > 0) continue;
     const got = maps.get(p.repo.toLowerCase())?.get(p.number);
@@ -277,11 +295,10 @@ async function enrichLabelsFromGitHub(prs: MinerPr[], issues: MinerIssue[]): Pro
   if (needy.size === 0) return;
 
   const palettes = new Map<string, Map<string, string>>();
-  await Promise.all(
-    [...needy].map(async (repo) => {
-      palettes.set(repo.toLowerCase(), await githubRepoLabelPalette(repo));
-    }),
-  );
+  // Same bound as the PR-label fan-out — never burst the GitHub API from one request.
+  await mapLimit([...needy].slice(0, GH_MAX_REPOS), GH_CONCURRENCY, async (repo) => {
+    palettes.set(repo.toLowerCase(), await githubRepoLabelPalette(repo));
+  });
 
   // Surface a real "other" label where the repo defines one.
   for (const p of prs) {
