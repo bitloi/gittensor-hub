@@ -202,6 +202,7 @@ async function githubRepoLabelPalette(repoFullName: string): Promise<Map<string,
  * cached. Fills labels the scoring feed never carries (e.g. "ci", "size:L") and the
  * mirror lacks (no raw_json) — the only way to label such PRs in the contributions table. */
 const ghPrLabelCache = new Map<string, { at: number; byNumber: Map<number, GhLabel[]> }>();
+const GH_PR_LABEL_CACHE_MAX = 500; // bound the repo::login cache so it can't grow without limit
 
 async function githubRepoPrLabels(repoFullName: string, login: string): Promise<Map<number, GhLabel[]>> {
   const key = `${repoFullName}::${login}`.toLowerCase();
@@ -228,6 +229,10 @@ async function githubRepoPrLabels(repoFullName: string, login: string): Promise<
     }
   } catch {
     /* unavailable (rate limit / missing) — empty map, callers keep existing labels */
+  }
+  if (ghPrLabelCache.size >= GH_PR_LABEL_CACHE_MAX) {
+    const oldest = ghPrLabelCache.keys().next().value;
+    if (oldest !== undefined) ghPrLabelCache.delete(oldest);
   }
   ghPrLabelCache.set(key, { at: Date.now(), byNumber });
   return byNumber;
@@ -608,7 +613,13 @@ export async function GET(req: NextRequest) {
   // Fill PRs the mirror/feed left label-less (e.g. external-repo PRs with "ci"/"size:L")
   // with their real GitHub labels, so they show in the contributions table — not just the
   // detail view.
-  await attachGithubPrLabels(prs, login);
+  // Canonical login for the live GitHub PR-label lookup: derive it from the matched PRs'
+  // own author, never the raw `login` param — otherwise a request pairing a valid githubId
+  // with an arbitrary login would spend GitHub quota under that login (listForRepo
+  // creator=login) and pollute the repo::login cache. >1 distinct author (ambiguous) → skip.
+  const prAuthors = new Set(mine.map((p) => p.authorLc).filter(Boolean));
+  const ghLookupLogin = prAuthors.size === 1 ? [...prAuthors][0] : '';
+  await attachGithubPrLabels(prs, ghLookupLogin);
   const issues = getIssues(login);
   // Reconcile labels with each repo's real GitHub palette (fill colors + surface a
   // genuine "other" label where the repo defines one).
